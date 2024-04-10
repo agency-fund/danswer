@@ -101,7 +101,7 @@ This will update the path to include playwright
 
 Then install Playwright by running:
 ```bash
-playwright install
+npx playwright install
 ```
 
 
