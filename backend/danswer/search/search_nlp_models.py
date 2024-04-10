@@ -5,7 +5,11 @@ from typing import Optional
 from typing import TYPE_CHECKING
 
 import requests
-from transformers import logging as transformer_logging  # type:ignore
+from transformers import logging as transformer_logging
+from .nlp_providers.cohere_provider import CohereProvider
+from .nlp_providers.local_model_server_provider import (
+    LocalModelServerProvider,
+)  # type:ignore
 
 from danswer.configs.app_configs import MODEL_SERVER_HOST
 from danswer.configs.app_configs import MODEL_SERVER_PORT
@@ -80,6 +84,13 @@ def build_model_server_url(
     return f"http://{model_server_url}"
 
 
+MODEL_SERVER = "local"
+
+nlp_provider = LocalModelServerProvider
+if MODEL_SERVER == "cohere":
+    nlp_provider = CohereProvider
+
+
 class EmbeddingModel:
     def __init__(
         self,
@@ -102,24 +113,7 @@ class EmbeddingModel:
         self.embed_server_endpoint = f"{model_server_url}/encoder/bi-encoder-embed"
 
     def encode(self, texts: list[str], text_type: EmbedTextType) -> list[list[float]]:
-        if text_type == EmbedTextType.QUERY and self.query_prefix:
-            prefixed_texts = [self.query_prefix + text for text in texts]
-        elif text_type == EmbedTextType.PASSAGE and self.passage_prefix:
-            prefixed_texts = [self.passage_prefix + text for text in texts]
-        else:
-            prefixed_texts = texts
-
-        embed_request = EmbedRequest(
-            texts=prefixed_texts,
-            model_name=self.model_name,
-            max_context_length=self.max_seq_length,
-            normalize_embeddings=self.normalize,
-        )
-
-        response = requests.post(self.embed_server_endpoint, json=embed_request.dict())
-        response.raise_for_status()
-
-        return EmbedResponse(**response.json()).embeddings
+        return nlp_provider(**self.__dict__).embedder_encode(texts, text_type)
 
 
 class CrossEncoderEnsembleModel:
@@ -132,14 +126,9 @@ class CrossEncoderEnsembleModel:
         self.rerank_server_endpoint = model_server_url + "/encoder/cross-encoder-scores"
 
     def predict(self, query: str, passages: list[str]) -> list[list[float]]:
-        rerank_request = RerankRequest(query=query, documents=passages)
-
-        response = requests.post(
-            self.rerank_server_endpoint, json=rerank_request.dict()
+        return nlp_provider(**self.__dict__).cross_encoder_ensemble_predict(
+            query, passages
         )
-        response.raise_for_status()
-
-        return RerankResponse(**response.json()).scores
 
 
 class IntentModel:
@@ -155,14 +144,7 @@ class IntentModel:
         self,
         query: str,
     ) -> list[float]:
-        intent_request = IntentRequest(query=query)
-
-        response = requests.post(
-            self.intent_server_endpoint, json=intent_request.dict()
-        )
-        response.raise_for_status()
-
-        return IntentResponse(**response.json()).class_probs
+        return nlp_provider(**self.__dict__).intent_predict(query)
 
 
 def warm_up_encoders(
@@ -191,13 +173,12 @@ def warm_up_encoders(
     # First time downloading the models it may take even longer, but just in case,
     # retry the whole server
     wait_time = 5
-    for attempt in range(20):
+    for _ in range(20):
         try:
             embed_model.encode(texts=[warm_up_str], text_type=EmbedTextType.QUERY)
             return
-        except Exception:
-            logger.info(
-                f"Failed to run test embedding, retrying in {wait_time} seconds..."
-            )
+        except Exception as e:
+            logger.error(f"Failed to run test embedding due to {e}")
+            logger.info(f"Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
     raise Exception("Failed to run test embedding.")
