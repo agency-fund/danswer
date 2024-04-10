@@ -1,6 +1,8 @@
+import json
 import os
 
 import requests
+from backend.shared_configs.model_server_models import IntentRequest, IntentResponse
 from danswer.search.enums import EmbedTextType
 from danswer.utils.logger import setup_logger
 from .base_provider import NLPProvider
@@ -13,6 +15,19 @@ COHERE_EMBED_MODEL = os.environ.get("COHERE_EMBED_MODEL", "embed-multilingual-v3
 
 # https://docs.cohere.com/reference/rerank-1
 COHERE_RERANK_MODEL = os.environ.get("COHERE_RERANK_MODEL", "rerank-multilingual-v2.0")
+
+# https://docs.cohere.com/reference/classify
+# NOTICE: Suggest using a fine-tuned Cohere model as won't need few shot examples
+COHERE_CLASSIFY_MODEL = os.environ.get(
+    "COHERE_CLASSIFY_MODEL", "embed-multilingual-v2.0"
+)
+
+COHERE_CLASSIFY_EXAMPLES = json.loads(
+    os.environ.get(
+        "COHERE_CLASSIFY_EXAMPLES",
+        '[{"text":"What is the answer to life, the universe, and everything?","label":"Rumination"},{"text":"I need help right now","label":"Urgent"},{"text":"Knock knock...","label":"Joke"}]',
+    )
+)
 
 logger = setup_logger()
 
@@ -69,7 +84,33 @@ class CohereProvider(NLPProvider):
         return [[score] for score in scores]
 
     def intent_predict(self, query: str) -> list[float]:
-        return [0]
+        # request_body = {
+        #     "model": COHERE_CLASSIFY_MODEL,
+        #     "inputs": [query],
+        # }
+
+        # if len(COHERE_CLASSIFY_EXAMPLES) > 0:
+        #     request_body["examples"] = COHERE_CLASSIFY_EXAMPLES
+
+        # response = make_cohere_request("classify", request_body)
+
+        # if response.status_code != 200:
+        #     raise ValueError(f"Failed to classify query: {response.text}")
+
+        # data = response.json()
+
+        # classification = data["classifications"][0]
+
+        # TODO: replace below with intent classification approach that uses cohere multilingual model
+
+        intent_request = IntentRequest(query=query)
+
+        response = requests.post(
+            self.intent_server_endpoint, json=intent_request.dict()
+        )
+        response.raise_for_status()
+
+        return IntentResponse(**response.json()).class_probs
 
 
 def make_cohere_request(path: str, body: dict) -> dict:
