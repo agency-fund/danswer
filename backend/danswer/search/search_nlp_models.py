@@ -4,12 +4,9 @@ import time
 from typing import Optional
 from typing import TYPE_CHECKING
 
-import requests
 from transformers import logging as transformer_logging
 from .nlp_providers.cohere_provider import CohereProvider
-from .nlp_providers.local_model_server_provider import (
-    LocalModelServerProvider,
-)  # type:ignore
+from .nlp_providers.local_model_server_provider import LocalModelServerProvider
 
 from danswer.configs.app_configs import MODEL_SERVER_HOST
 from danswer.configs.app_configs import MODEL_SERVER_PORT
@@ -17,12 +14,6 @@ from danswer.configs.model_configs import DOC_EMBEDDING_CONTEXT_SIZE
 from danswer.configs.model_configs import DOCUMENT_ENCODER_MODEL
 from danswer.search.enums import EmbedTextType
 from danswer.utils.logger import setup_logger
-from shared_configs.model_server_models import EmbedRequest
-from shared_configs.model_server_models import EmbedResponse
-from shared_configs.model_server_models import IntentRequest
-from shared_configs.model_server_models import IntentResponse
-from shared_configs.model_server_models import RerankRequest
-from shared_configs.model_server_models import RerankResponse
 
 transformer_logging.set_verbosity_error()
 
@@ -84,7 +75,7 @@ def build_model_server_url(
     return f"http://{model_server_url}"
 
 
-MODEL_SERVER = "local"
+MODEL_SERVER = os.environ.get("MODEL_SERVER", "local")
 
 nlp_provider = LocalModelServerProvider
 if MODEL_SERVER == "cohere":
@@ -172,10 +163,13 @@ def warm_up_encoders(
 
     # First time downloading the models it may take even longer, but just in case,
     # retry the whole server
-    wait_time = 5
-    for _ in range(20):
+    wait_time = 2
+    for _ in range(2):
         try:
-            embed_model.encode(texts=[warm_up_str], text_type=EmbedTextType.QUERY)
+            embeddings = embed_model.encode(
+                texts=[warm_up_str], text_type=EmbedTextType.QUERY
+            )
+            logger.info(f"Embedding len: {len(embeddings[0])}")
             return
         except Exception as e:
             logger.error(f"Failed to run test embedding due to {e}")
