@@ -51,7 +51,7 @@ from danswer.db.auth import get_access_token_db
 from danswer.db.auth import get_default_admin_user_emails
 from danswer.db.auth import get_user_count
 from danswer.db.auth import get_user_db
-from danswer.db.engine import get_session
+from danswer.db.engine import get_session, get_sqlalchemy_engine
 from danswer.db.models import AccessToken
 from danswer.db.models import User
 from danswer.db.users import get_user_by_email
@@ -181,28 +181,29 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         associate_by_email: bool = False,
         is_verified_by_default: bool = False,
     ) -> models.UOAP:
-        verify_email_in_whitelist(account_email)
-        verify_email_domain(account_email)
+        with Session(get_sqlalchemy_engine()) as db_session:
+            verify_email_in_whitelist(account_email, db_session)
+            verify_email_domain(account_email)
 
-        user = await super().oauth_callback(  # type: ignore
-            oauth_name=oauth_name,
-            access_token=access_token,
-            account_id=account_id,
-            account_email=account_email,
-            expires_at=expires_at,
-            refresh_token=refresh_token,
-            request=request,
-            associate_by_email=associate_by_email,
-            is_verified_by_default=is_verified_by_default,
-        )
+            user = await super().oauth_callback(  # type: ignore
+                oauth_name=oauth_name,
+                access_token=access_token,
+                account_id=account_id,
+                account_email=account_email,
+                expires_at=expires_at,
+                refresh_token=refresh_token,
+                request=request,
+                associate_by_email=associate_by_email,
+                is_verified_by_default=is_verified_by_default,
+            )
 
-        # NOTE: google oauth expires after 1hr. We don't want to force the user to
-        # re-authenticate that frequently, so for now we'll just ignore this for
-        # google oauth users
-        if expires_at and AUTH_TYPE != AuthType.GOOGLE_OAUTH:
-            oidc_expiry = datetime.fromtimestamp(expires_at, tz=timezone.utc)
-            await self.user_db.update(user, update_dict={"oidc_expiry": oidc_expiry})
-        return user
+            # NOTE: google oauth expires after 1hr. We don't want to force the user to
+            # re-authenticate that frequently, so for now we'll just ignore this for
+            # google oauth users
+            if expires_at and AUTH_TYPE != AuthType.GOOGLE_OAUTH:
+                oidc_expiry = datetime.fromtimestamp(expires_at, tz=timezone.utc)
+                await self.user_db.update(user, update_dict={"oidc_expiry": oidc_expiry})
+            return user
 
     async def on_after_register(
         self, user: User, request: Optional[Request] = None
