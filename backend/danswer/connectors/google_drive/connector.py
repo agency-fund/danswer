@@ -7,6 +7,9 @@ from enum import Enum
 from itertools import chain
 from typing import Any
 from typing import cast
+from zipfile import BadZipFile
+
+import requests
 
 from google.oauth2.credentials import Credentials as OAuthCredentials  # type: ignore
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials  # type: ignore
@@ -304,38 +307,48 @@ def get_all_files_batched(
                 )
 
 
-def extract_text(file: dict[str, str], service: discovery.Resource) -> str:
+def extract_text(file: dict[str, str], service: discovery.Resource, credentials: ServiceAccountCredentials) -> str:
     mime_type = file["mimeType"]
     if mime_type not in set(item.value for item in GDriveMimeType):
         # Unsupported file types can still have a title, finding this way is still useful
         return UNSUPPORTED_FILE_TYPE_CONTENT
 
-    if mime_type == GDriveMimeType.DOC.value:
-        return (
-            service.files()
-            .export(fileId=file["id"], mimeType="text/plain")
-            .execute()
-            .decode("utf-8")
-        )
-    elif mime_type == GDriveMimeType.SPREADSHEET.value:
-        return (
-            service.files()
-            .export(fileId=file["id"], mimeType="text/csv")
-            .execute()
-            .decode("utf-8")
-        )
-    elif mime_type == GDriveMimeType.WORD_DOC.value:
-        response = service.files().get_media(fileId=file["id"]).execute()
-        return docx_to_text(file=io.BytesIO(response))
-    elif mime_type == GDriveMimeType.PDF.value:
-        response = service.files().get_media(fileId=file["id"]).execute()
-        return pdf_to_text(file=io.BytesIO(response))
-    elif mime_type == GDriveMimeType.POWERPOINT.value:
-        response = service.files().get_media(fileId=file["id"]).execute()
-        return pptx_to_text(file=io.BytesIO(response))
-    elif mime_type == GDriveMimeType.PPT.value:
-        response = service.files().get_media(fileId=file["id"]).execute()
-        return pptx_to_text(file=io.BytesIO(response))
+    try:
+        if mime_type == GDriveMimeType.DOC.value:
+            return (
+                service.files()
+                .export(fileId=file["id"], mimeType="text/plain")
+                .execute()
+                .decode("utf-8")
+            )
+        elif mime_type == GDriveMimeType.SPREADSHEET.value:
+            return (
+                service.files()
+                .export(fileId=file["id"], mimeType="text/csv")
+                .execute()
+                .decode("utf-8")
+            )
+        elif mime_type == GDriveMimeType.WORD_DOC.value:
+            response = service.files().get_media(fileId=file["id"]).execute()
+            return docx_to_text(file=io.BytesIO(response))
+        elif mime_type == GDriveMimeType.PDF.value:
+            response = service.files().get_media(fileId=file["id"]).execute()
+            return pdf_to_text(file=io.BytesIO(response))
+        elif mime_type == GDriveMimeType.POWERPOINT.value:
+            response = service.files().get_media(fileId=file["id"]).execute()
+            return pptx_to_text(file=io.BytesIO(response))
+        elif mime_type == GDriveMimeType.PPT.value:
+            access_token = credentials.token
+            url = f"https://docs.google.com/feeds/download/presentations/Export?id={file['id']}&exportFormat=pptx"
+            headers = {"Authorization": f"Bearer {access_token}"}
+            response = requests.get(url, headers=headers, timeout=300) # 5 min timeout
+            file_data = response.content
+            try:
+                return pptx_to_text(file=io.BytesIO(file_data))
+            except BadZipFile as exc:
+                logger.exception("Cannot parse pptx at url: %s", url, exc_info=exc)
+    except HttpError as exc:
+        logger.exception("Google API error for url: %s", url, exc_info=exc)
 
     return UNSUPPORTED_FILE_TYPE_CONTENT
 
@@ -487,7 +500,7 @@ class GoogleDriveConnector(LoadConnector, PollConnector):
                         ):
                             continue
 
-                    text_contents = extract_text(file, service) or ""
+                    text_contents = extract_text(file, service, self.creds) or ""
 
                     doc_batch.append(
                         Document(
